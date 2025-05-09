@@ -4,8 +4,12 @@ require("dotenv").config();
 const {
   FallbackProvider,
   JsonRpcProvider,
-  /* … */
+  Wallet,
+  Contract,
+  parseUnits,
+  formatUnits
 } = require("ethers");
+
 
 // Explicitly pass the Sepolia chainId (11155111) so they all report the same network
 const provider = new FallbackProvider(
