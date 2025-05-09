@@ -1,6 +1,6 @@
 // bot.js
 require("dotenv").config();
-// After:
+
 const {
   FallbackProvider,
   JsonRpcProvider,
@@ -12,13 +12,18 @@ const {
 const fs = require("fs");
 const nodemailer = require("nodemailer");
 
-// Create a provider that automatically fails over between multiple endpoints:
-const provider = new FallbackProvider([
-  new JsonRpcProvider(process.env.INFURA_SEPOLIA_URL),
-  new JsonRpcProvider("https://rpc.sepolia.org"),
-  new JsonRpcProvider("https://eth-sepolia.public.blastapi.io")
-]);
-const wallet   = new Wallet(process.env.PRIVATE_KEY, provider);
+// FallbackProvider with quorum = 1
+const provider = new FallbackProvider(
+  [
+    new JsonRpcProvider(process.env.INFURA_SEPOLIA_URL),
+    new JsonRpcProvider("https://rpc.sepolia.org"),
+    new JsonRpcProvider("https://eth-sepolia.public.blastapi.io")
+  ],
+  1
+);
+
+const wallet = new Wallet(process.env.PRIVATE_KEY, provider);
+// … rest of your bot.js …
 
 // ── 2) Attach your deployed contract ──────────────────────────────────────────
 const arbAbi = require("./artifacts/contracts/MemoryArbBot.sol/MemoryArbBot.json").abi;
