@@ -9,6 +9,8 @@ const {
   parseUnits,
   formatUnits
 } = require("ethers");
+const fs = require("fs");
+const nodemailer = require("nodemailer");
 
 // Create a provider that automatically fails over between multiple endpoints:
 const provider = new FallbackProvider([
