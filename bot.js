@@ -15,11 +15,25 @@ const nodemailer = require("nodemailer");
 const provider = new JsonRpcProvider(process.env.INFURA_SEPOLIA_URL);
 const wallet   = new Wallet(process.env.PRIVATE_KEY, provider);
 
-// ── 2) Attach your deployed contract ──────────────────────────────────────────
-const arbAbi = require("./artifacts/contracts/MemoryArbBot.sol/MemoryArbBot.json").abi;
-const arbBot = new Contract(process.env.ARBITRAGE_CONTRACT, arbAbi, wallet);
+// ── 2) Instantiate Uniswap V2 Router (for off-chain price checks) ─────────────
+const uniV2Abi = [
+  "function getAmountsOut(uint256 amountIn, address[] calldata path) external view returns (uint256[] memory)"
+];
+const router = new Contract(
+  process.env.UNISWAP_ROUTER, // address of Uniswap V2 Router on Sepolia
+  uniV2Abi,
+  provider
+);
 
-// ── 3) Email transporter ───────────────────────────────────────────────────────
+// ── 3) Attach your deployed arbitrage contract ─────────────────────────────────
+const arbAbi = require("./artifacts/contracts/MemoryArbBot.sol/MemoryArbBot.json").abi;
+const arbBot = new Contract(
+  process.env.ARBITRAGE_CONTRACT,
+  arbAbi,
+  wallet
+);
+
+// ── 4) Email transporter ───────────────────────────────────────────────────────
 const transporter = nodemailer.createTransport({
   service: "gmail",
   auth: {
@@ -29,20 +43,20 @@ const transporter = nodemailer.createTransport({
 });
 async function sendAlert(subject, text) {
   await transporter.sendMail({
-    from:    process.env.EMAIL_USER,
-    to:      process.env.EMAIL_TO,
+    from: process.env.EMAIL_USER,
+    to:   process.env.EMAIL_TO,
     subject,
     text
   });
 }
 
-// ── 4) Strategy & withdrawal params ────────────────────────────────────────────
-const TRADE_AMOUNT       = parseUnits("0.05", 18);   // 0.05 ETH per attempt
-const MIN_PROFIT         = parseUnits("0.0001", 18); // simulateArb guard
-const WITHDRAW_THRESHOLD = parseUnits("0.2",  18);   // auto-withdraw once 0.2 ETH net
-const INTERVAL_MS        = 60_000;                   // loop every 60s
+// ── 5) Strategy & withdrawal params ────────────────────────────────────────────
+const TRADE_AMOUNT       = parseUnits("0.05", 18);
+const MIN_PROFIT         = parseUnits("0.0001", 18);
+const WITHDRAW_THRESHOLD = parseUnits("0.2",  18);
+const INTERVAL_MS        = 60_000;
 
-// ── 5) Metrics setup ───────────────────────────────────────────────────────────
+// ── 6) Metrics setup ───────────────────────────────────────────────────────────
 const METRICS_FILE = "metrics.csv";
 let tradeCount     = 0;
 let cumProfit      = parseUnits("0", 18);
@@ -54,19 +68,33 @@ if (!fs.existsSync(METRICS_FILE)) {
   );
 }
 
-// ── 6) Main loop ────────────────────────────────────────────────────────────────
+// ── 7) Main loop ────────────────────────────────────────────────────────────────
 console.log("🚀 Starting arbitrage loop…");
 setInterval(async () => {
   try {
-    // 1️⃣ Off-chain simulate
+    // 1️⃣ Off-chain price check (optional)
+    const amounts = await router.getAmountsOut(
+      TRADE_AMOUNT,
+      [process.env.TOKEN0_ADDRESS, process.env.TOKEN1_ADDRESS]
+    );
+    const potentialOffchain = amounts[1].gt(TRADE_AMOUNT)
+      ? amounts[1].sub(TRADE_AMOUNT)
+      : parseUnits("0", 18);
+    console.log(
+      "Off-chain simulated profit:",
+      formatUnits(potentialOffchain, 18),
+      "ETH"
+    );
+
+    // 2️⃣ On-chain simulate
     const potential = await arbBot.simulateArb(TRADE_AMOUNT);
-    console.log("Simulated profit:", formatUnits(potential,18), "ETH");
+    console.log("On-chain simulated profit:", formatUnits(potential,18), "ETH");
     if (potential.lt(MIN_PROFIT)) {
       console.log("⚠️ Below minProfit, skipping");
       return;
     }
 
-    // 2️⃣ Execute on-chain trade
+    // 3️⃣ Execute on-chain trade
     const tx      = await arbBot.executeArb(TRADE_AMOUNT, MIN_PROFIT);
     console.log("⛓ Tx sent:", tx.hash);
     const receipt = await tx.wait();
@@ -82,22 +110,16 @@ setInterval(async () => {
       `✅ Trade #${tradeCount+1}: profit=${profitEth} ETH, gas=${gasEth} ETH, net=${netEth} ETH`
     );
 
-    // 3️⃣ Log metrics
+    // 4️⃣ Log metrics
     tradeCount++;
     const now = new Date().toISOString();
     fs.appendFileSync(
       METRICS_FILE,
-      [
-        tradeCount,
-        now,
-        profitEth,
-        gasUsed.toString(),
-        gasEth,
-        netEth
-      ].join(",") + "\n"
+      [tradeCount, now, profitEth, gasUsed.toString(), gasEth, netEth]
+        .join(",") + "\n"
     );
 
-    // 4️⃣ Update cumulative profit & withdraw if threshold hit
+    // 5️⃣ Withdraw if threshold reached
     cumProfit = cumProfit.add(netProf);
     if (cumProfit.gte(WITHDRAW_THRESHOLD)) {
       console.log("🔄 Threshold reached—withdrawing profit");
@@ -109,7 +131,7 @@ setInterval(async () => {
       cumProfit = parseUnits("0", 18);
     }
 
-    // 5️⃣ Send email alert
+    // 6️⃣ Send email alert
     await sendAlert(
       `✅ Arb #${tradeCount}`,
       `Profit: ${profitEth} ETH\nGas: ${gasEth} ETH\nNet: ${netEth} ETH\nTx: ${tx.hash}`
