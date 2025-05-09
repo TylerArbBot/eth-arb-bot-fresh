@@ -1,6 +1,5 @@
 // bot.js
 require("dotenv").config();
-
 const {
   JsonRpcProvider,
   Wallet,
@@ -8,6 +7,7 @@ const {
   parseUnits,
   formatUnits
 } = require("ethers");
+const fs = require("fs");
 const nodemailer = require("nodemailer");
 
 // ── 1) Setup provider & wallet ────────────────────────────────────────────────
@@ -18,7 +18,7 @@ const wallet   = new Wallet(process.env.PRIVATE_KEY, provider);
 const arbAbi = require("./artifacts/contracts/MemoryArbBot.sol/MemoryArbBot.json").abi;
 const arbBot = new Contract(process.env.ARBITRAGE_CONTRACT, arbAbi, wallet);
 
-// ── 3) Configure email transporter ────────────────────────────────────────────
+// ── 3) Email transporter ───────────────────────────────────────────────────────
 const transporter = nodemailer.createTransport({
   service: "gmail",
   auth: {
@@ -35,58 +35,83 @@ async function sendAlert(subject, text) {
   });
 }
 
-// ── 4) Strategy parameters ────────────────────────────────────────────────────
-// Trade 0.05 ETH each attempt (1/4 of your 0.2 ETH bankroll)
-const TRADE_AMOUNT = parseUnits("0.05", 18);
+// ── 4) Strategy & withdrawal params ────────────────────────────────────────────
+const TRADE_AMOUNT      = parseUnits("0.05", 18);   // 0.05 ETH per attempt
+const MIN_PROFIT        = parseUnits("0.0001", 18); // executeArb guard
+const WITHDRAW_THRESHOLD= parseUnits("0.2",  18);   // auto-withdraw once 0.2 ETH net
+const INTERVAL_MS       = 60_000;                   // loop every 60s
 
-// Only execute if profit ≥ 0.0001 ETH (~0.2% of 0.05 ETH)
-// This covers typical L2 gas (~0.00002–0.00005 ETH) and leaves buffer
-const MIN_PROFIT   = parseUnits("0.0001", 18);
+// ── 5) Metrics setup ───────────────────────────────────────────────────────────
+const METRICS_FILE = "metrics.csv";
+let tradeCount     = 0;
+let cumProfit      = parseUnits("0", 18);
 
-// How often to check (in milliseconds)
-const INTERVAL_MS  = 60_000; // every 60 seconds
+// Write CSV header if missing
+if (!fs.existsSync(METRICS_FILE)) {
+  fs.writeFileSync(
+    METRICS_FILE,
+    "trade,timestamp,amount0,profit,gasUsed,gasCost,netProfit\n"
+  );
+}
 
+// ── 6) Main loop ────────────────────────────────────────────────────────────────
 console.log("🚀 Starting arbitrage loop…");
 setInterval(async () => {
   try {
     // 1️⃣ Off-chain simulate
     const potential = await arbBot.simulateArb(TRADE_AMOUNT);
-    console.log(
-      "Simulated profit:",
-      formatUnits(potential, 18),
-      "ETH"
-    );
-
-    // 2️⃣ Skip if below your threshold
+    console.log("Simulated profit:", formatUnits(potential,18), "ETH");
     if (potential.lt(MIN_PROFIT)) {
-      console.log("⚠️ Skipping: profit below", formatUnits(MIN_PROFIT, 18));
+      console.log("⚠️ Skipping—below minProfit");
       return;
     }
 
-    // 3️⃣ Submit the on-chain transaction with two args
-    const tx = await arbBot.executeArb(
-      TRADE_AMOUNT,
-      MIN_PROFIT,
-      {
-        // (optional) you can set gasPrice or maxFeePerGas here if you want
-      }
-    );
+    // 2️⃣ Execute on-chain trade
+    const tx = await arbBot.executeArb(TRADE_AMOUNT, MIN_PROFIT);
     console.log("⛓ Tx sent:", tx.hash);
-
-    // 4️⃣ Wait for confirmation
     const receipt = await tx.wait();
+    const gasUsed    = receipt.gasUsed;
+    const gasPrice   = receipt.effectiveGasPrice;
+    const gasCost    = gasUsed.mul(gasPrice);
+    const gasCostEth = formatUnits(gasCost, 18);
+    const profitEth  = formatUnits(potential, 18);
+    const netProfit  = potential.sub(gasCost);
+    const netEth     = formatUnits(netProfit, 18);
+
     console.log(
-      "✅ Executed in block",
-      receipt.blockNumber,
-      "| Profit:",
-      formatUnits(potential, 18),
-      "ETH"
+      `✅ Trade #${tradeCount+1}: profit=${profitEth} ETH, gas=${gasCostEth} ETH, net=${netEth} ETH`
     );
 
-    // 5️⃣ Alert via email
+    // 3️⃣ Log metrics
+    tradeCount++;
+    const timeStr = new Date().toISOString();
+    const row = [
+      tradeCount,
+      timeStr,
+      formatUnits(TRADE_AMOUNT,18),
+      profitEth,
+      gasUsed.toString(),
+      gasCostEth,
+      netEth
+    ].join(",");
+    fs.appendFileSync(METRICS_FILE, row + "\n");
+
+    // 4️⃣ Update cumulative profit & maybe withdraw
+    cumProfit = cumProfit.add(netProfit);
+    if (cumProfit.gte(WITHDRAW_THRESHOLD)) {
+      console.log("🔄 Threshold reached—withdrawing all profit");
+      await arbBot.withdrawTokens(process.env.TOKEN0_ADDRESS);
+      await sendAlert(
+        "🔔 Auto-Withdrawal",
+        `Withdrew ${formatUnits(cumProfit,18)} ETH profit to wallet`
+      );
+      cumProfit = parseUnits("0", 18);
+    }
+
+    // 5️⃣ Email alert per trade
     await sendAlert(
-      "✅ Arb Executed",
-      `Profit: ${formatUnits(potential, 18)} ETH\nTx: ${tx.hash}`
+      `✅ Arb #${tradeCount}`,
+      `Profit: ${profitEth} ETH\nGas: ${gasCostEth} ETH\nNet: ${netEth} ETH\nTx: ${tx.hash}`
     );
   } catch (err) {
     console.error("❌ Execution error:", err.message);
