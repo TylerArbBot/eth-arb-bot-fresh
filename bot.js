@@ -4,22 +4,17 @@ require("dotenv").config();
 const {
   FallbackProvider,
   JsonRpcProvider,
-  Wallet,
-  Contract,
-  parseUnits,
-  formatUnits
+  /* … */
 } = require("ethers");
-const fs = require("fs");
-const nodemailer = require("nodemailer");
 
-// FallbackProvider with quorum = 1
+// Explicitly pass the Sepolia chainId (11155111) so they all report the same network
 const provider = new FallbackProvider(
   [
-    new JsonRpcProvider(process.env.INFURA_SEPOLIA_URL),
-    new JsonRpcProvider("https://rpc.sepolia.org"),
-    new JsonRpcProvider("https://eth-sepolia.public.blastapi.io")
+    new JsonRpcProvider(process.env.INFURA_SEPOLIA_URL, 11155111),
+    new JsonRpcProvider("https://rpc.sepolia.org",      11155111),
+    new JsonRpcProvider("https://eth-sepolia.public.blastapi.io", 11155111)
   ],
-  1
+  1 // quorum: 1
 );
 
 const wallet = new Wallet(process.env.PRIVATE_KEY, provider);
