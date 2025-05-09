@@ -1,6 +1,5 @@
 // bot.js
 require("dotenv").config();
-
 const {
   FallbackProvider,
   JsonRpcProvider,
@@ -9,7 +8,8 @@ const {
   parseUnits,
   formatUnits
 } = require("ethers");
-
+const fs = require("fs");
+const nodemailer = require("nodemailer");   // ← new line!
 
 // Explicitly pass the Sepolia chainId (11155111) so they all report the same network
 const provider = new FallbackProvider(
