@@ -17,10 +17,10 @@ const wallet   = new Wallet(process.env.PRIVATE_KEY, provider);
 
 // ── 2) Instantiate Uniswap V2 Router (for off-chain price checks) ─────────────
 const uniV2Abi = [
-  "function getAmountsOut(uint256 amountIn, address[] calldata path) external view returns (uint256[] memory)"
+  "function getAmountsOut(uint256 amountIn, address[] calldata path) view returns (uint256[] memory)"
 ];
 const router = new Contract(
-  process.env.UNISWAP_ROUTER, // address of Uniswap V2 Router on Sepolia
+  process.env.UNISWAP_ROUTER,
   uniV2Abi,
   provider
 );
@@ -77,9 +77,9 @@ setInterval(async () => {
       TRADE_AMOUNT,
       [process.env.TOKEN0_ADDRESS, process.env.TOKEN1_ADDRESS]
     );
-    const potentialOffchain = amounts[1].gt(TRADE_AMOUNT)
-      ? amounts[1].sub(TRADE_AMOUNT)
-      : parseUnits("0", 18);
+    const potentialOffchain = (amounts[1] > TRADE_AMOUNT)
+      ? (amounts[1] - TRADE_AMOUNT)
+      : 0n;
     console.log(
       "Off-chain simulated profit:",
       formatUnits(potentialOffchain, 18),
@@ -88,8 +88,12 @@ setInterval(async () => {
 
     // 2️⃣ On-chain simulate
     const potential = await arbBot.simulateArb(TRADE_AMOUNT);
-    console.log("On-chain simulated profit:", formatUnits(potential,18), "ETH");
-    if (potential.lt(MIN_PROFIT)) {
+    console.log(
+      "On-chain simulated profit:",
+      formatUnits(potential,18),
+      "ETH"
+    );
+    if (potential < MIN_PROFIT) {
       console.log("⚠️ Below minProfit, skipping");
       return;
     }
@@ -99,8 +103,8 @@ setInterval(async () => {
     console.log("⛓ Tx sent:", tx.hash);
     const receipt = await tx.wait();
     const gasUsed = receipt.gasUsed;
-    const gasCost = gasUsed.mul(receipt.effectiveGasPrice);
-    const netProf = potential.sub(gasCost);
+    const gasCost = gasUsed * receipt.effectiveGasPrice;
+    const netProf = potential - gasCost;
 
     const profitEth = formatUnits(potential,18);
     const gasEth    = formatUnits(gasCost,18);
@@ -120,8 +124,8 @@ setInterval(async () => {
     );
 
     // 5️⃣ Withdraw if threshold reached
-    cumProfit = cumProfit.add(netProf);
-    if (cumProfit.gte(WITHDRAW_THRESHOLD)) {
+    cumProfit = cumProfit + netProf;
+    if (cumProfit >= WITHDRAW_THRESHOLD) {
       console.log("🔄 Threshold reached—withdrawing profit");
       await arbBot.withdrawTokens(process.env.TOKEN0_ADDRESS);
       await sendAlert(
