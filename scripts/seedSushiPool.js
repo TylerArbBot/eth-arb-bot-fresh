@@ -27,7 +27,7 @@ async function main() {
 
   // Approve 100 units of each and wait for confirmations
   const amountA = ethers.parseUnits("100", 18);
-  const amountB = ethers.parseUnits("100", 18);
+  const amountB = ethers.parseUnits("200", 18);
   const approvalA = await tokenA.approve(routerAddress, amountA);
   await approvalA.wait();
   const approvalB = await tokenB.approve(routerAddress, amountB);
