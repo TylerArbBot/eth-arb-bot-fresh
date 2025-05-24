@@ -1,0 +1,13 @@
+[
+  {
+    "constant": true,
+    "inputs": [
+      { "name": "tokenA", "type": "address" },
+      { "name": "tokenB", "type": "address" }
+    ],
+    "name": "getPair",
+    "outputs": [{ "name": "pair", "type": "address" }],
+    "type": "function"
+  }
+]
+
